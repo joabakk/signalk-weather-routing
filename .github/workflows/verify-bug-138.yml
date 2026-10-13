@@ -96,13 +96,14 @@ jobs:
           docker exec signalk-server sh -c "rm -rf /home/node/.signalk/_weather-routing-src"
       - name: Configure and enable the plugin with test polar + GRIB
         run: |
-          mkdir -p "$CONF/wr-test/grib" "$CONF/plugin-config-data"
+          mkdir -p "$CONF/wr-test/grib"
           cp plugin-src/test-data/sunwind33.pol "$CONF/wr-test/"
           cp plugin-src/test-data/Denmark_ICON_EU_EWAM_20260606-00.grb2 "$CONF/wr-test/grib/"
-          cat > "$CONF/plugin-config-data/signalk-weather-routing.json" <<'JSON'
-          {"enabled": true, "configuration": {"polarPath": "/home/node/.signalk/wr-test/sunwind33.pol", "gribDir": "/home/node/.signalk/wr-test/grib"}}
-          JSON
-          chmod -R a+rwX "$CONF/wr-test" "$CONF/plugin-config-data"
+          chmod -R a+rwX "$CONF/wr-test"
+          # plugin-config-data is created by the server as the container user; write it from inside
+          echo '{"enabled": true, "configuration": {"polarPath": "/home/node/.signalk/wr-test/sunwind33.pol", "gribDir": "/home/node/.signalk/wr-test/grib"}}' | \
+            docker exec -i signalk-server sh -c \
+              "mkdir -p /home/node/.signalk/plugin-config-data && cat > /home/node/.signalk/plugin-config-data/signalk-weather-routing.json"
       - name: "DEVELOPMENT.md step 5: restart Signal K"
         run: |
           docker restart signalk-server
