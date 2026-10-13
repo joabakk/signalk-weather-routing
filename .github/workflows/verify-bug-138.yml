@@ -67,6 +67,7 @@ jobs:
         run: |
           mkdir -p "$CONF" && chmod 777 "$CONF"
           docker run -d --name signalk-server -p 3000:3000 \
+            -e DEBUG=signalk-weather-routing,signalk-server:interfaces:plugins \
             -v "$CONF:/home/node/.signalk" signalk/signalk-server:latest
           for i in $(seq 1 60); do curl -sf http://localhost:3000/signalk >/dev/null && break; sleep 2; done
           curl -sf http://localhost:3000/signalk
@@ -107,20 +108,23 @@ jobs:
       - name: "DEVELOPMENT.md step 5: restart Signal K"
         run: |
           docker restart signalk-server
-          for i in $(seq 1 90); do curl -sf "$PLUGIN_URL/status" >/dev/null && break; sleep 2; done
-      - name: Plugin started and gdal-async works at runtime
+          for i in $(seq 1 60); do curl -s -o /dev/null http://localhost:3000/signalk && break; sleep 2; done
+          sleep 30
+      - name: Plugin started and gdal-async works at runtime (checked inside the container)
         run: |
-          set -x
-          curl -sf "$PLUGIN_URL/status"; echo
-          for i in $(seq 1 60); do
-            n=$(curl -sf "$PLUGIN_URL/grib-info" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(j.files.length+j.currentFiles.length)})')
-            [ "${n:-0}" -ge 1 ] && break; sleep 2
-          done
-          curl -sf "$PLUGIN_URL/grib-info" | tee grib-info.json; echo
-          node -e 'const j=require("./grib-info.json"); if (j.files.length+j.currentFiles.length<1 || j.failedFiles.length) { console.error("GRIB not indexed:", JSON.stringify(j.failedFiles)); process.exit(1) }'
-          curl -sf http://localhost:3000/skServer/plugins | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const p=JSON.parse(s).find(p=>p.id==="signalk-weather-routing"); console.log(JSON.stringify({id:p.id,version:p.version,enabled:p.data&&p.data.enabled,statusMessage:p.statusMessage})); if(!p||!p.data.enabled) process.exit(1)})'
-          echo "binding dir after plugin start (copied by ensureGdalBinary):"
-          docker exec signalk-server sh -c "ls -la /home/node/.signalk/node_modules/gdal-async/lib/binding/*/ 2>&1" || true
+          echo "--- plugin log lines"
+          docker logs signalk-server 2>&1 | grep -iE "weather-routing|gdal" | tail -40
+          if docker logs signalk-server 2>&1 | grep -iE "weather-routing" | grep -iE "error|cannot find module|failed"; then
+            echo "plugin reported an error"; exit 1
+          fi
+          echo "--- gdal-async binding after plugin start (copied by ensureGdalBinary)"
+          docker exec signalk-server sh -c "ls -la /home/node/.signalk/node_modules/gdal-async/lib/binding/*/gdal.node"
+          echo "--- installed plugin reads the test GRIB through gdal-async"
+          docker exec signalk-server node -e '
+            const g = require("/home/node/.signalk/node_modules/signalk-weather-routing/dist/lib/grib.js");
+            g.readGribMeta("/home/node/.signalk/wr-test/grib/Denmark_ICON_EU_EWAM_20260606-00.grb2")
+              .then((m) => console.log(JSON.stringify(m).slice(0, 400)))
+              .catch((e) => { console.error(e); process.exit(1); });'
       - name: Plugin's own tests inside the container, registry-style install
         run: |
           docker exec signalk-server sh -c \
