@@ -1,0 +1,40 @@
+# Throwaway verification for BUG-138 (fork only): mirrors the Signal K plugin registry's
+# test step — install with --ignore-scripts, build, test — on code before and after the fix.
+name: Verify BUG-138
+on:
+  push:
+    branches: [verify/BUG-138]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  registry-like-test:
+    name: ${{ matrix.label }} on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        label: [before-fix-expect-fail, after-fix-expect-pass]
+        include:
+          - label: before-fix-expect-fail
+            ref: a69fc1bba9eab35d348ecd5991d60a718c44418a
+          - label: after-fix-expect-pass
+            ref: cfecfeefad4d498130a742864f8618d42d0299ba
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install like the registry
+        run: npm ci --ignore-scripts || npm install --ignore-scripts
+      - name: Show gdal-async binding dir before tests
+        run: ls -la node_modules/gdal-async/lib/binding 2>&1 || true
+      - run: npm run build
+      - run: npm test
+      - name: Show gdal-async binding dir after tests
+        if: always()
+        run: ls -la node_modules/gdal-async/lib/binding/*/ 2>&1 || true
