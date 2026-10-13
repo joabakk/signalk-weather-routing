@@ -72,6 +72,15 @@ jobs:
           for i in $(seq 1 60); do curl -sf http://localhost:3000/signalk >/dev/null && break; sleep 2; done
           curl -sf http://localhost:3000/signalk
           docker exec signalk-server node -v
+      - name: Create a throwaway admin user (random per-run password, masked)
+        run: |
+          PW=$(openssl rand -hex 24)
+          echo "::add-mask::$PW"
+          umask 077 && printf '%s' "$PW" > "$RUNNER_TEMP/sk-pw"
+          printf '{"userId":"ci-admin","password":"%s","type":"admin"}' "$PW" | \
+            curl -sf -X POST -H 'Content-Type: application/json' --data-binary @- \
+              http://localhost:3000/skServer/enableSecurity
+          echo
       - name: "DEVELOPMENT.md step 1: copy source into the bind-mounted volume"
         run: |
           cp -r plugin-src "$CONF/_weather-routing-src"
@@ -110,6 +119,21 @@ jobs:
           docker restart signalk-server
           for i in $(seq 1 60); do curl -s -o /dev/null http://localhost:3000/signalk && break; sleep 2; done
           sleep 30
+      - name: Plugin endpoints respond and gdal-async indexed the GRIB (via HTTP, logged in)
+        run: |
+          printf '{"username":"ci-admin","password":"%s"}' "$(cat "$RUNNER_TEMP/sk-pw")" | \
+            curl -sf -c "$RUNNER_TEMP/cj" -o /dev/null -X POST -H 'Content-Type: application/json' \
+              --data-binary @- http://localhost:3000/signalk/v1/auth/login
+          get() { curl -sf -b "$RUNNER_TEMP/cj" "$@"; }
+          echo "--- /status"; get "$PLUGIN_URL/status"; echo
+          for i in $(seq 1 60); do
+            n=$(get "$PLUGIN_URL/grib-info" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(j.files.length+j.currentFiles.length)})')
+            [ "${n:-0}" -ge 1 ] && break; sleep 2
+          done
+          echo "--- /grib-info"; get "$PLUGIN_URL/grib-info" | tee grib-info.json; echo
+          node -e 'const j=require("./grib-info.json"); if (j.files.length+j.currentFiles.length<1 || j.failedFiles.length) { console.error("GRIB not indexed:", JSON.stringify(j.failedFiles)); process.exit(1) }'
+          echo "--- /skServer/plugins entry"
+          get http://localhost:3000/skServer/plugins | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const p=JSON.parse(s).find(p=>p.id==="signalk-weather-routing"); if(!p){console.error("plugin not listed");process.exit(1)} console.log(JSON.stringify({id:p.id,version:p.version,enabled:p.data&&p.data.enabled})); if(!p.data.enabled) process.exit(1)})'
       - name: Plugin started and gdal-async works at runtime (checked inside the container)
         run: |
           echo "--- plugin log lines"
